@@ -4,6 +4,10 @@ import math
 import pandas
 import codecs
 import numpy as np
+
+import nltk
+import sys
+
 from collections import Counter
 from nltk.tokenize import word_tokenize
 from IPython.display import HTML, display
@@ -14,19 +18,53 @@ TRAIN_SPLIT = 0.8
 categories = ['Energy', 'Food', 'Medical', 'None', 'Water']
 need_or_resource_labels = ['need', 'resource', 'N/A']
 
+import nltk
 
 class Tweet(object):
   def __init__(self, tweetSurfaceForm, category, need_or_resource):
+    self.orig = tweetSurfaceForm
     if isinstance(tweetSurfaceForm, unicode):
       self.tokenList = word_tokenize(tweetSurfaceForm)
     else:
       self.tokenList = word_tokenize(tweetSurfaceForm.decode('utf-8','ignore'))
     self.tokenList = [t.lower() for t in self.tokenList] # lowercase
-    self.tokenSet = set(self.tokenList)
     self._bigramList = [(self.tokenList[idx], self.tokenList[idx+1]) for idx in range(len(self.tokenList)-1)]
-    self._featureSet = set(self._bigramList).union(self.tokenSet)
+    
+    # Filter by part of speech (pos)    
+    # Example: [('After', 'IN'), ('import', 'NN'), ('NLTK', 'NNP'), ('in', 'IN'), ('python', 'NN'), ('interpreter', 'NN'), (',', ','), ('you', 'PRP'), ('should', 'MD'), ('use', 'VB'), ('word_tokenize', 'NN'), ('before', 'IN'), ('pos', 'NN'), ('tagging', 'NN'), (',', ','), ('which', 'WDT'), ('referred', 'VBD'), ('as', 'IN'), ('pos_tag', 'JJ'), ('method', 'NN'), (':', ':')]
+    tagset = read_tagset()
+    sentence = ' '.join(self.tokenList)
+    self.tokenList = []
+    #print "==============="
+    #print tweetSurfaceForm
+    text = nltk.word_tokenize(sentence)
+    tagged = nltk.pos_tag(text)
+    for tuple in tagged :
+        if len(tuple) > 1 and tuple[1] in tagset:
+            word = tuple[0]
+            use = tagset[tuple[1]]
+            if use == "3" :
+                self.tokenList.append(word)
+                self.tokenList.append(word)
+            elif use == "Y" :
+                self.tokenList.append(word)
+    #self.tokenList = [x for x in self.tokenList if not (x in stopwords)]
+    #print "===after tag===="
+    #print self.tokenList
+
+    # Filter stop words
+    stopwords = read_stopwords()
+    self.tokenList = [x for x in self.tokenList if not (x in stopwords)]
+    self._bigramList = [x for x in self._bigramList if not ((x[0] in stopwords) or (x[1] in stopwords))]
+    #print "===after stop word===="
+    #print self.tokenList
+    
+    self.tokenSet = set(self.tokenList)
+    #self._featureSet = set(self._bigramList).union(self.tokenSet)
+    self._featureSet = (self._bigramList) + (self.tokenList)
     self.category = category
     self.need_or_resource = need_or_resource
+
 
   def __getitem__(self,index):
     return self.tokenList[index]
@@ -43,6 +81,26 @@ class Tweet(object):
   def __repr__(self):
       return self.__str__()
 
+def read_stopwords():
+   stopwords_path = 'data/stopwords.txt'
+   data = set()
+   with open(stopwords_path) as f:
+     reader = csv.reader(f)
+     for row in reader:
+       (word) = row
+       if len(row) > 0 :
+            data.add(row[0])
+   return data
+
+def read_tagset():
+   stopwords_path = 'data/PennTreebankIITagSet.tsv'
+   data = {}
+   with open(stopwords_path) as f:
+     reader = csv.reader(f, delimiter='\t')
+     for row in reader:
+       (tag, description, example, use) = row
+       data[tag]=use
+   return data
 
 def read_csv(path):
    data = {}
@@ -247,6 +305,8 @@ def get_log_posterior_prob(tweet, prob_c, feature_probs_c):
     Return:
         The posterior P(c|tweet).
     """
+    if prob_c <= 0 : return -sys.maxint - 1
+
     log_posterior = math.log(prob_c)
     for feature in tweet._featureSet:
         if feature_probs_c[feature] == 0:
@@ -255,6 +315,22 @@ def get_log_posterior_prob(tweet, prob_c, feature_probs_c):
             log_posterior += math.log(feature_probs_c[feature])
     return log_posterior
 
+#ALL_CATEGORIES = ["Energy", "Food", "Medical", "None", "Water"]
+def get_log_posterior_prob_neg(tweet, prob, feature_probs, category):
+    prob_n = (sum(prob.values()) - prob[category]) / 3
+    
+    if prob_n <= 0 : return -sys.maxint - 1
+    log_posterior = math.log(prob_n)
+    for feature in tweet._featureSet:
+        if feature_probs[category][feature] == 0:
+            log_posterior += math.log(SMOOTH_CONST)
+        else:
+            feature_probs_n = SMOOTH_CONST
+            for c in categories :
+                feature_probs_n = feature_probs_n + feature_probs[c][feature]
+            feature_probs_n = feature_probs_n - feature_probs[category][feature]
+            log_posterior += math.log(feature_probs_n / 3)
+    return log_posterior
 
 def classify_nb(tweet, prior_probs, token_probs):
     """Classifies a tweet. Calculates the posterior P(c|tweet) for each category c,
@@ -266,6 +342,24 @@ def classify_nb(tweet, prior_probs, token_probs):
     """
     log_posteriors = {c: get_log_posterior_prob(tweet, prior_probs[c], token_probs[c]) for c in categories}
     return max(log_posteriors.keys(), key=lambda c:log_posteriors[c])
+
+def classify_nb_binary(tweet, prior_probs, token_probs):
+    log_posteriors_p = {c: get_log_posterior_prob(tweet, prior_probs[c], token_probs[c]) for c in categories}
+    log_posteriors_n = {c: get_log_posterior_prob_neg(tweet, prior_probs, token_probs, c) for c in categories}
+    
+    # print log_posteriors_p
+    
+    log_posteriors = {}
+    for c, prob in log_posteriors_p.iteritems() : 
+        prob_n = log_posteriors_n[c]
+        delta = prob - prob_n
+        if delta < 0 :
+            delta = 0
+        log_posteriors[c] = delta
+        
+    res = max(log_posteriors.keys(), key=lambda c:log_posteriors[c])
+    if log_posteriors[res] == 0 : return "None"
+    return res
 
 
 def get_box_contents(n_boxes = 2):
