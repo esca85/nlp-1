@@ -1,8 +1,5 @@
 # Tweet Classification for Disaster Relief
 
-This is the homepage for the [SAILORS 2017](http://sailors.stanford.edu/) NLP research project. 
-Here you can find links to all class materials used for the research project.
-
 Instructors: [Abi See](http://cs.stanford.edu/people/abisee/) (abisee@stanford.edu), [Sebastian Schuster](http://sebschu.com/) (sebschu@stanford.edu)
 
 ## Slides
